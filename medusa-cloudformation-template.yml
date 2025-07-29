@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Medusa E-commerce Application on AWS ECS Fargate
+Description: Medusa E-commerce Application on AWS ECS Fargate (Single AZ, No ALBs)
 
 Parameters:
   # Parameters for database credentials (to be securely stored in Secrets Manager)
@@ -37,56 +37,41 @@ Resources:
           "cookie_secret": "${MedusaCookieSecret}"
         }
 
-  # 2. RDS PostgreSQL Database for Medusa
-  MedusaDatabase:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBSubnetGroupName: !Ref MedusaDBSubnetGroup
-      DBName: medusa-db
-      Engine: postgres
-      EngineVersion: '10.19' # Match your local Postgres version as closely as possible, 10.4 is quite old. 10.x latest is 10.19
-      MasterUsername: !Ref MasterUsername
-      MasterUserPassword: !Ref MasterPassword
-      # For a demo, using db.t3.micro (free tier eligible)
-      DBInstanceClass: db.t3.micro
-      AllocatedStorage: 20 # Minimum required storage, 20GB is suitable for a demo
-      StorageType: gp2
-      PubliclyAccessible: false # Keep private within VPC for security
-      MultiAZ: false # Not needed for a demo, saves cost
-      BackupRetentionPeriod: 0 # Disable backups for a demo to save cost
-      # DBSubnetGroupName: !Ref MedusaDBSubnetGroup # We'll define this later when we set up VPC
-      VPCSecurityGroups: # We'll define security groups later
-        - !GetAtt MedusaDBSecurityGroup.GroupId
-
-  # 3. Security Group for RDS Database (allows traffic from ECS)
-  MedusaDBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow inbound traffic to Medusa RDS instance from ECS Fargate tasks.
-      VpcId: !Ref MedusaVPC # We'll define this VPC later
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 5432 # Correct port for PostgreSQL
-          ToPort: 5432 # Correct port for PostgreSQL
-          SourceSecurityGroupId: !GetAtt MedusaECSTaskSecurityGroup.GroupId
-      Tags:
-        - Key: Name
-          Value: MedusaDBSecurityGroup
-
-# 4. VPC (Virtual Private Cloud)
-  #    This defines the isolated network where all your resources will reside.
+  # 2. VPC for the Medusa application
   MedusaVPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16 # A common, non-overlapping CIDR block for your VPC
+      CidrBlock: 10.0.0.0/16
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
         - Key: Name
           Value: MedusaVPC
 
-  # 5. Internet Gateway
-  #    Allows communication between your VPC and the internet.
+  # 3. Public Subnet (only one for single AZ deployment)
+  MedusaPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MedusaVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ''] # Automatically picks first AZ in region
+      MapPublicIpOnLaunch: true # Allows instances in this subnet to get public IPs
+      Tags:
+        - Key: Name
+          Value: MedusaPublicSubnet1
+
+  # 4. Private Subnet (only one for single AZ deployment)
+  MedusaPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MedusaVPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs ''] # Must be in the same AZ as Public Subnet 1 for internal routing
+      Tags:
+        - Key: Name
+          Value: MedusaPrivateSubnet1
+
+  # 5. Internet Gateway (Allows communication between VPC and the Internet)
   MedusaInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -95,80 +80,13 @@ Resources:
           Value: MedusaInternetGateway
 
   # 6. Attach Internet Gateway to VPC
-  MedusaVPCGatewayAttachment:
+  AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref MedusaVPC
       InternetGatewayId: !Ref MedusaInternetGateway
 
-  # 7. Public Subnets (for Load Balancers and NAT Gateway)
-  #    Resources in these subnets can access the internet directly.
-  #    We'll create two for high availability across different Availability Zones (AZs).
-  MedusaPublicSubnet1:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref MedusaVPC
-      CidrBlock: 10.0.1.0/24
-      AvailabilityZone: !Select [0, !GetAZs ''] # Automatically picks first AZ in region
-      MapPublicIpOnLaunch: true # EC2 instances launched here get public IPs
-      Tags:
-        - Key: Name
-          Value: MedusaPublicSubnet1
-
-  MedusaPublicSubnet2:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref MedusaVPC
-      CidrBlock: 10.0.2.0/24
-      AvailabilityZone: !Select [1, !GetAZs ''] # Automatically picks second AZ in region
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: MedusaPublicSubnet2
-
-  # 8. Private Subnets (for ECS Tasks and Database)
-  #    Resources here do not have direct internet access but can access the internet
-  #    via a NAT Gateway. More secure.
-  MedusaPrivateSubnet1:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref MedusaVPC
-      CidrBlock: 10.0.3.0/24
-      AvailabilityZone: !Select [0, !GetAZs '']
-      Tags:
-        - Key: Name
-          Value: MedusaPrivateSubnet1
-
-  MedusaPrivateSubnet2:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref MedusaVPC
-      CidrBlock: 10.0.4.0/24
-      AvailabilityZone: !Select [1, !GetAZs '']
-      Tags:
-        - Key: Name
-          Value: MedusaPrivateSubnet2
-
-  # 9. Elastic IP for NAT Gateway
-  #    A static public IP address for the NAT Gateway.
-  MedusaNatGatewayEIP:
-    Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc # Associate with VPC
-
-  # 10. NAT Gateway
-  #     Allows instances in private subnets to initiate outbound connections to the internet.
-  MedusaNatGateway:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt MedusaNatGatewayEIP.AllocationId
-      SubnetId: !Ref MedusaPublicSubnet1 # NAT Gateway must reside in a public subnet
-      Tags:
-        - Key: Name
-          Value: MedusaNatGateway
-
-  # 11. Route Tables for Public Subnets
-  #     Routes traffic from public subnets to the Internet Gateway.
+  # 7. Route Table for Public Subnet
   MedusaPublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -177,27 +95,41 @@ Resources:
         - Key: Name
           Value: MedusaPublicRouteTable
 
+  # 8. Route to Internet Gateway from Public Route Table
   MedusaPublicRoute:
     Type: AWS::EC2::Route
     Properties:
       RouteTableId: !Ref MedusaPublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0 # Route all outbound traffic to the internet
-      GatewayId: !Ref MedusaInternetGateway # Via the Internet Gateway
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MedusaInternetGateway
 
+  # 9. Associate Public Subnet with Public Route Table
   MedusaPublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref MedusaPublicSubnet1
       RouteTableId: !Ref MedusaPublicRouteTable
 
-  MedusaPublicSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
+  # 10. NAT Gateway (for private subnet to access the internet outbound)
+  #     Ensure the EIP is provisioned before the NAT Gateway.
+  MedusaNatGatewayEIP:
+    Type: AWS::EC2::EIP
     Properties:
-      SubnetId: !Ref MedusaPublicSubnet2
-      RouteTableId: !Ref MedusaPublicRouteTable
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: MedusaNatGatewayEIP
+  MedusaNATGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AttachGateway # Ensure IGW is attached before NAT Gateway
+    Properties:
+      AllocationId: !GetAtt MedusaNatGatewayEIP.AllocationId
+      SubnetId: !Ref MedusaPublicSubnet1 # NAT Gateway must be in a public subnet
+      Tags:
+        - Key: Name
+          Value: MedusaNATGateway
 
-  # 12. Route Tables for Private Subnets
-  #     Routes traffic from private subnets to the NAT Gateway for internet access.
+  # 11. Route Table for Private Subnet
   MedusaPrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -206,229 +138,239 @@ Resources:
         - Key: Name
           Value: MedusaPrivateRouteTable
 
+  # 12. Route to NAT Gateway from Private Route Table
   MedusaPrivateRoute:
     Type: AWS::EC2::Route
     Properties:
       RouteTableId: !Ref MedusaPrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0 # Route all outbound traffic to the internet
-      NatGatewayId: !Ref MedusaNatGateway # Via the NAT Gateway
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref MedusaNATGateway
 
+  # 13. Associate Private Subnet with Private Route Table
   MedusaPrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref MedusaPrivateSubnet1
       RouteTableId: !Ref MedusaPrivateRouteTable
 
-  MedusaPrivateSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
+  # 14. RDS Security Group (Allows traffic from ECS tasks)
+  MedusaDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      SubnetId: !Ref MedusaPrivateSubnet2
-      RouteTableId: !Ref MedusaPrivateRouteTable
-
-  # Update the RDS Security Group Ingress to allow traffic from our private subnets (where ECS will be)
-  # This section needs to be placed within the MedusaDBSecurityGroup in the earlier part of the template
-  # For now, let's keep it as a note to integrate into the MedusaDBSecurityGroup
-  # It will look something like this once the ECS Security Group is defined:
-  # SecurityGroupIngress:
-  #   - IpProtocol: tcp
-  #     FromPort: 5432 # PostgreSQL default port
-  #     ToPort: 5432
-  #     SourceSecurityGroupId: !GetAtt MedusaECSTaskSecurityGroup.GroupId # ECS Task Security Group
-
-# 13. ElastiCache Redis Cluster for Medusa
-  MedusaCacheCluster:
-    Type: AWS::ElastiCache::ReplicationGroup
-    Properties:
-      CacheNodeType: cache.t3.micro # Free tier eligible, small instance for demo
-      Engine: redis
-      EngineVersion: '6.x' # Use a recent, stable Redis version
-      NumCacheClusters: 1 # A single node for a demo, saves cost
-      ReplicationGroupDescription: Redis cluster for Medusa application
-      Port: 6379
-      PreferredMaintenanceWindow: sun:05:00-sun:06:00 # A maintenance window
-      SecurityGroupIds:
-        - !GetAtt MedusaCacheSecurityGroup.GroupId # We'll define this security group next
-      SnapshotRetentionLimit: 0 # Disable snapshots for a demo to save cost
-      TransitEncryptionEnabled: true # Good practice for encryption in transit
-      AtRestEncryptionEnabled: false # Disable at-rest encryption for demo to save cost (can enable if sensitive data)
-      AutomaticFailoverEnabled: false # Disable failover for demo (single node), saves cost
-      # DBSubnetGroupName: !Ref MedusaCacheSubnetGroup # We'll define this later, but same subnets as RDS
-      CacheSubnetGroupName: !Ref MedusaDBSubnetGroup # Using the same DB Subnet Group for simplicity and cost
+      GroupDescription: Security group for Medusa RDS PostgreSQL database.
+      VpcId: !Ref MedusaVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432 # PostgreSQL default port
+          ToPort: 5432
+          SourceSecurityGroupId: !GetAtt MedusaECSTaskSecurityGroup.GroupId # Allow traffic from ECS tasks
       Tags:
         - Key: Name
-          Value: MedusaCacheCluster
+          Value: MedusaDBSecurityGroup
 
-  # 14. Security Group for ElastiCache (allows traffic from ECS)
+  # 15. ElastiCache Security Group (Allows traffic from ECS tasks)
   MedusaCacheSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow inbound traffic to Medusa ElastiCache instance from ECS Fargate tasks.
+      GroupDescription: Security group for Medusa ElastiCache Redis.
       VpcId: !Ref MedusaVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 6379 # Redis default port
           ToPort: 6379
-          SourceSecurityGroupId: !GetAtt MedusaECSTaskSecurityGroup.GroupId
+          SourceSecurityGroupId: !GetAtt MedusaECSTaskSecurityGroup.GroupId # Allow traffic from ECS tasks
       Tags:
         - Key: Name
           Value: MedusaCacheSecurityGroup
 
-  # 15. DB Subnet Group (Required for RDS and ElastiCache)
-  #     Specifies the subnets within the VPC that RDS and ElastiCache instances can use.
-  MedusaDBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup # Also used by ElastiCache
-    Properties:
-      DBSubnetGroupDescription: Subnet group for Medusa RDS and ElastiCache instances.
-      SubnetIds:
-        - !Ref MedusaPrivateSubnet1
-        - !Ref MedusaPrivateSubnet2
-      Tags:
-        - Key: Name
-          Value: MedusaDBSubnetGroup
-
-  # 16. ECS Task Security Group (Allows ECS Tasks to talk to DB and Redis)
+  # 16. ECS Task Security Group (Allows ECS Tasks to talk to DB and Redis, and now public)
   MedusaECSTaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for Medusa ECS Fargate tasks.
       VpcId: !Ref MedusaVPC
-      # No Ingress rules here initially, as tasks primarily initiate outbound connections to DB/Redis.
-      # Ingress will be controlled by Load Balancers for inbound to containers.
+      SecurityGroupIngress:
+        # Allow HTTP traffic to Medusa Storefront (port 8000) and Backend (port 9000) from anywhere
+        - IpProtocol: tcp
+          FromPort: 8000 # Storefront default port
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 9000 # Backend default port
+          ToPort: 9000
+          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
           Value: MedusaECSTaskSecurityGroup
 
-# 17. ECS Cluster
-  #     A logical grouping for your ECS services and tasks.
-  MedusaECSCluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: MedusaEcsCluster
-      Tags:
-        - Key: Name
-          Value: MedusaEcsCluster
-
-  # 18. IAM Role for ECS Task Execution
-  #     This role grants ECS tasks permission to pull images from ECR and publish logs to CloudWatch.
+  # 17. IAM Role for ECS Task Execution (Allows ECS tasks to pull images and write logs)
   MedusaECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: MedusaEcsTaskExecutionRole
+      RoleName: MedusaECSTaskExecutionRole
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
               Service: ecs-tasks.amazonaws.com
-            Action:
-              - sts:AssumeRole
+            Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy # Basic execution permissions
-        - arn:aws:iam::aws:policy/AmazonECRContainerRegistryReadOnly # Permission to pull images from ECR
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy # Provides permissions for ECS tasks to pull images and publish logs
       Tags:
         - Key: Name
-          Value: MedusaEcsTaskExecutionRole
+          Value: MedusaECSTaskExecutionRole
 
-  # 19. IAM Role for Medusa Backend ECS Tasks
-  #     This role grants Medusa backend specific permissions, e.g., to access Secrets Manager.
-  MedusaBackendTaskRole:
+  # 18. IAM Role for ECS Tasks (Allows ECS tasks to access Secrets Manager)
+  MedusaECSTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: MedusaBackendTaskRole
+      RoleName: MedusaECSTaskRole
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
               Service: ecs-tasks.amazonaws.com
-            Action:
-              - sts:AssumeRole
+            Action: sts:AssumeRole
       Policies:
-        - PolicyName: MedusaBackendAccessPolicy
+        - PolicyName: SecretsManagerAccessPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow # Allow the backend to retrieve secrets from Secrets Manager
+              - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                  - secretsmanager:DescribeSecret
-                Resource: !Ref MedusaSecrets # Only access to the specific secret we created
+                Resource: !Ref MedusaSecrets # Allows access to the MedusaSecrets
       Tags:
         - Key: Name
-          Value: MedusaBackendTaskRole
+          Value: MedusaECSTaskRole
 
-  # 20. Log Group for Medusa Backend
+  # 19. CloudWatch Log Group for Medusa Backend
   MedusaBackendLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /ecs/medusa-backend
-      RetentionInDays: 7 # Retain logs for 7 days (adjustable for cost)
+      RetentionInDays: 7 # Retain logs for 7 days
       Tags:
         - Key: Name
           Value: MedusaBackendLogGroup
 
-  # 21. Log Group for Medusa Storefront
+  # 20. CloudWatch Log Group for Medusa Storefront
   MedusaStorefrontLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /ecs/medusa-storefront
-      RetentionInDays: 7 # Retain logs for 7 days (adjustable for cost)
+      RetentionInDays: 7 # Retain logs for 7 days
       Tags:
         - Key: Name
           Value: MedusaStorefrontLogGroup
 
-# 22. ECS Task Definition for Medusa Backend
-  #     Defines the Docker image, resources (CPU/Memory), and environment variables for the backend.
+  # 21. Medusa RDS PostgreSQL Database
+  MedusaDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: medusa-postgres-db
+      DBName: medusadb
+      Engine: postgres
+      EngineVersion: '14.5' # Or a version compatible with Medusa
+      DBInstanceClass: db.t3.micro # Cost-effective instance type for demo
+      AllocatedStorage: 20 # GB
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterPassword
+      VPCSecurityGroups:
+        - !GetAtt MedusaDBSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref MedusaDBSubnetGroup # Associate with DB subnet group
+      PubliclyAccessible: false # Database should not be publicly accessible
+      StorageEncrypted: true
+      Tags:
+        - Key: Name
+          Value: MedusaDatabase
+
+  # 22. RDS DB Subnet Group (for private subnet)
+  MedusaDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for Medusa RDS instance.
+      SubnetIds:
+        - !Ref MedusaPrivateSubnet1
+      Tags:
+        - Key: Name
+          Value: MedusaDBSubnetGroup
+
+  # 23. ElastiCache Subnet Group (for private subnet)
+  MedusaCacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Subnets for Medusa ElastiCache Redis.
+      SubnetIds:
+        - !Ref MedusaPrivateSubnet1
+      Tags:
+        - Key: Name
+          Value: MedusaCacheSubnetGroup
+
+  # 24. ElastiCache Redis Cluster (single node for demo)
+  MedusaRedis:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: medusa-redis-cluster
+      ReplicationGroupDescription: Medusa Redis Cache
+      Engine: redis
+      CacheNodeType: cache.t3.micro # Cost-effective node type for demo
+      NumCacheClusters: 1 # Single node for demo
+      Port: 6379
+      PreferredMaintenanceWindow: mon:05:00-mon:06:00
+      SecurityGroupIds:
+        - !GetAtt MedusaCacheSecurityGroup.GroupId
+      CacheSubnetGroupName: !Ref MedusaCacheSubnetGroup
+      Tags:
+        - Key: Name
+          Value: MedusaRedis
+
+  # 25. ECS Cluster
+  MedusaECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: MedusaECSCluster
+      Tags:
+        - Key: Name
+          Value: MedusaECSCluster
+
+  # 26. ECS Task Definition for Medusa Backend
   MedusaBackendTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: medusa-backend-task # A unique name for the task definition
-      Cpu: '1024' # 1 vCPU - suitable for demo, adjust as needed
-      Memory: '2048' # 2GB RAM - suitable for demo, adjust as needed
-      NetworkMode: awsvpc # Required for Fargate
+      Family: medusa-backend-task
+      Cpu: '256' # 0.25 vCPU
+      Memory: '512' # 0.5 GB
+      NetworkMode: awsvpc
       RequiresCompatibilities:
-        - FARGATE # Specify Fargate launch type
-      ExecutionRoleArn: !GetAtt MedusaECSTaskExecutionRole.Arn # Role for ECS to execute tasks (pull images, send logs)
-      TaskRoleArn: !GetAtt MedusaBackendTaskRole.Arn # Role for backend application to access secrets
+        - FARGATE
+      ExecutionRoleArn: !GetAtt MedusaECSTaskExecutionRole.Arn # For ECS to pull images and send logs
+      TaskRoleArn: !GetAtt MedusaECSTaskRole.Arn # For Medusa to access secrets
       ContainerDefinitions:
         - Name: medusa-backend-container
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/medusa-backend:latest" # Your ECR backend image
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/medusa-backend:latest" # Replace with your ECR URI
           PortMappings:
             - ContainerPort: 9000 # Medusa backend default port
               Protocol: tcp
           Environment:
+            - Name: DATABASE_URL
+              Value: !Sub "postgres://${MasterUsername}:${MasterPassword}@${MedusaDatabase.Endpoint.Address}:5432/medusadb"
+            - Name: REDIS_URL
+              Value: !Sub "redis://${MedusaRedis.PrimaryEndPoint.Address}:6379"
+            - Name: JWT_SECRET
+              Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref MedusaSecrets, '}}' ] ] # From Secrets Manager
+            - Name: COOKIE_SECRET
+              Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref MedusaSecrets, '}}' ] ] # From Secrets Manager
             - Name: NODE_ENV
               Value: production
-            - Name: MEDUSA_BACKEND_URL # Internal URL for backend's own reference
-              Value: http://0.0.0.0:9000
-            - Name: DATABASE_TYPE
-              Value: postgres
-            - Name: DATABASE_DATABASE
-              Value: medusa-db
-            - Name: DATABASE_HOST
-              Value: !GetAtt MedusaDatabase.Endpoint.Address
-            - Name: DATABASE_PORT
-              Value: !GetAtt MedusaDatabase.Endpoint.Port
-            # Database username and password will be retrieved as secrets by the Medusa backend
-            # Note: Medusa automatically uses process.env.DATABASE_USERNAME and process.env.DATABASE_PASSWORD
-            # when DATABASE_URL is not set and DB_TYPE is postgres.
-            # We'll inject them via Secrets Manager for security.
-            - Name: REDIS_URL
-              Value: !Sub "redis://${MedusaCacheCluster.PrimaryEndPoint.Address}:${MedusaCacheCluster.PrimaryEndPoint.Port}"
-            # CORS_ORIGINS will be dynamically set by the ECS Service itself or ALB later,
-            # but for a secure setup, the backend should explicitly whitelist the storefront's public URL.
-            # We will use the Storefront's Load Balancer DNS name here once it's defined.
-            - Name: CORS_ORIGINS
-              Value: !Sub "http://${MedusaStorefrontALB.DNSName},http://localhost:8000" # Updated to reference Storefront ALB
-          Secrets: # Securely inject sensitive values from Secrets Manager
-            - Name: DATABASE_USERNAME # Map to env var DATABASE_USERNAME
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:username::"
-            - Name: DATABASE_PASSWORD # Map to env var DATABASE_PASSWORD
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:password::"
-            - Name: JWT_SECRET # Map to env var JWT_SECRET
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:jwt_secret::"
-            - Name: COOKIE_SECRET # Map to env var COOKIE_SECRET
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:cookie_secret::"
+            # Add other necessary Medusa environment variables here
+            # For local demo, you might need to set STORE_CORS and ADMIN_CORS if you have frontend
+            - Name: STORE_CORS
+              Value: http://localhost:8000,* # Adjust for local frontend testing. For deployed storefront, use its public IP/DNS
+            - Name: ADMIN_CORS
+              Value: http://localhost:7000,* # Adjust for local admin testing.
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -436,39 +378,33 @@ Resources:
               awslogs-region: !Ref 'AWS::Region'
               awslogs-stream-prefix: medusa-backend
 
-  # 23. ECS Task Definition for Medusa Storefront
-  #     Defines the Docker image, resources, and environment variables for the storefront.
+  # 27. ECS Task Definition for Medusa Storefront
   MedusaStorefrontTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: medusa-storefront-task
-      Cpu: '512' # 0.5 vCPU - suitable for demo
-      Memory: '1024' # 1GB RAM - suitable for demo
+      Cpu: '256' # 0.25 vCPU
+      Memory: '512' # 0.5 GB
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
-      ExecutionRoleArn: !GetAtt MedusaECSTaskExecutionRole.Arn # Same execution role
+      ExecutionRoleArn: !GetAtt MedusaECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt MedusaECSTaskRole.Arn
       ContainerDefinitions:
         - Name: medusa-storefront-container
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/medusa-storefront:latest" # Your ECR storefront image
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/medusa-storefront:latest" # Replace with your ECR URI
           PortMappings:
-            - ContainerPort: 8000 # Next.js Medusa storefront default port
+            - ContainerPort: 8000 # Storefront default port
               Protocol: tcp
           Environment:
-            - Name: NODE_ENV
-              Value: production
+            # These are for the NEXT.js storefront to connect to the Medusa backend
             - Name: NEXT_PUBLIC_MEDUSA_BACKEND_URL
-              # This will be dynamically set to the Backend's Load Balancer DNS name
-              Value: !Sub "http://${MedusaBackendALB.DNSName}" # Updated to reference Backend ALB
+              Value: !Sub "http://${MedusaBackendService.Tasks.PublicIP}:9000" # This will need manual update after deployment
             - Name: NEXT_PUBLIC_BASE_URL
-              # This will be dynamically set to the Storefront's Load Balancer DNS name
-              Value: !Sub "http://${MedusaStorefrontALB.DNSName}" # Updated to reference Storefront ALB
-            - Name: NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
-              Value: pk_1526a1701b4f755788a1b5f72c6454d0f0a37a929a6d2ddbb9b8c0a9a99b9348 # Your specific key
+              Value: !Sub "http://${MedusaStorefrontService.Tasks.PublicIP}:8000" # This will need manual update after deployment
             - Name: NEXT_PUBLIC_DEFAULT_REGION
-              Value: us # As confirmed
-            - Name: NEXT_PUBLIC_STRIPE_KEY
-              Value: "" # As confirmed (empty for demo)
+              Value: us
+            # Add other necessary storefront environment variables here
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -476,119 +412,7 @@ Resources:
               awslogs-region: !Ref 'AWS::Region'
               awslogs-stream-prefix: medusa-storefront
 
-
-# 24. Application Load Balancer (ALB) for Medusa Storefront (Public Facing)
-  MedusaStorefrontALB:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Scheme: internet-facing # Accessible from the internet
-      Subnets: # Resides in public subnets
-        - !Ref MedusaPublicSubnet1
-        - !Ref MedusaPublicSubnet2
-      SecurityGroups:
-        - !GetAtt MedusaALBSecurityGroup.GroupId # We'll define this general ALB security group
-      Tags:
-        - Key: Name
-          Value: MedusaStorefrontALB
-
-  # 25. ALB Target Group for Medusa Storefront
-  #     Where the ALB sends traffic for the storefront containers.
-  MedusaStorefrontTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: MedusaStorefrontTG
-      Port: 8000 # The port the storefront container listens on
-      Protocol: HTTP
-      VpcId: !Ref MedusaVPC
-      TargetType: ip # Fargate uses IP targets
-      HealthCheckIntervalSeconds: 30
-      HealthCheckPath: / # Or a more specific health check path for your storefront
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 2
-      Tags:
-        - Key: Name
-          Value: MedusaStorefrontTG
-
-  # 26. ALB Listener for Medusa Storefront (HTTP)
-  #     Listens for incoming HTTP traffic on port 80 and forwards to the target group.
-  MedusaStorefrontListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref MedusaStorefrontALB
-      Port: 80
-      Protocol: HTTP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref MedusaStorefrontTargetGroup
-
-  # 27. Application Load Balancer (ALB) for Medusa Backend (Public Facing for API)
-  MedusaBackendALB:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Scheme: internet-facing # Accessible from the internet
-      Subnets:
-        - !Ref MedusaPublicSubnet1
-        - !Ref MedusaPublicSubnet2
-      SecurityGroups:
-        - !GetAtt MedusaALBSecurityGroup.GroupId
-      Tags:
-        - Key: Name
-          Value: MedusaBackendALB
-
-  # 28. ALB Target Group for Medusa Backend
-  #     Where the ALB sends traffic for the backend containers.
-  MedusaBackendTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: MedusaBackendTG
-      Port: 9000 # The port the backend container listens on
-      Protocol: HTTP
-      VpcId: !Ref MedusaVPC
-      TargetType: ip
-      HealthCheckIntervalSeconds: 30
-      HealthCheckPath: /health # Medusa backend health check endpoint
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 2
-      Tags:
-        - Key: Name
-          Value: MedusaBackendTG
-
-  # 29. ALB Listener for Medusa Backend (HTTP)
-  #     Listens for incoming HTTP traffic on port 9000 and forwards to the target group.
-  MedusaBackendListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref MedusaBackendALB
-      Port: 9000
-      Protocol: HTTP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref MedusaBackendTargetGroup
-
-  # 30. Security Group for ALBs (Allows public HTTP traffic)
-  MedusaALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow HTTP access to the ALBs.
-      VpcId: !Ref MedusaVPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0 # Allow HTTP from anywhere
-        - IpProtocol: tcp
-          FromPort: 9000 # Allow HTTP for backend API from anywhere
-          ToPort: 9000
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: Name
-          Value: MedusaALBSecurityGroup
-
-  # 31. ECS Service for Medusa Backend
+  # 28. ECS Service for Medusa Backend
   #     Launches and maintains the desired number of backend tasks.
   MedusaBackendService:
     Type: AWS::ECS::Service
@@ -599,21 +423,16 @@ Resources:
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED # Tasks are in private subnets, access internet via NAT Gateway
+          AssignPublicIp: ENABLED # Now explicitly public
           Subnets:
-            - !Ref MedusaPrivateSubnet1
-            - !Ref MedusaPrivateSubnet2
+            - !Ref MedusaPublicSubnet1 # Now in public subnet
           SecurityGroups:
-            - !GetAtt MedusaECSTaskSecurityGroup.GroupId # ECS Task SG for internal communication
-      LoadBalancers:
-        - ContainerName: medusa-backend-container
-          ContainerPort: 9000
-          TargetGroupArn: !Ref MedusaBackendTargetGroup
+            - !GetAtt MedusaECSTaskSecurityGroup.GroupId # ECS Task SG for internal communication and public ingress
       Tags:
         - Key: Name
           Value: MedusaBackendService
 
-  # 32. ECS Service for Medusa Storefront
+  # 29. ECS Service for Medusa Storefront
   #     Launches and maintains the desired number of storefront tasks.
   MedusaStorefrontService:
     Type: AWS::ECS::Service
@@ -624,35 +443,16 @@ Resources:
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
+          AssignPublicIp: ENABLED # Now explicitly public
           Subnets:
-            - !Ref MedusaPrivateSubnet1
-            - !Ref MedusaPrivateSubnet2
+            - !Ref MedusaPublicSubnet1 # Now in public subnet
           SecurityGroups:
-            - !GetAtt MedusaECSTaskSecurityGroup.GroupId
-      LoadBalancers:
-        - ContainerName: medusa-storefront-container
-          ContainerPort: 8000
-          TargetGroupArn: !Ref MedusaStorefrontTargetGroup
+            - !GetAtt MedusaECSTaskSecurityGroup.GroupId # ECS Task SG for internal communication and public ingress
       Tags:
         - Key: Name
           Value: MedusaStorefrontService
 
 Outputs:
-  # Outputs the public URL for the Medusa Storefront
-  MedusaStorefrontURL:
-    Description: The URL for the Medusa Storefront application.
-    Value: !GetAtt MedusaStorefrontALB.DNSName
-    Export:
-      Name: MedusaStorefrontURL
-
-  # Outputs the public URL for the Medusa Backend API
-  MedusaBackendAPIURL:
-    Description: The URL for the Medusa Backend API.
-    Value: !GetAtt MedusaBackendALB.DNSName
-    Export:
-      Name: MedusaBackendAPIURL
-
   # Optionally, output the Cluster Name for easy reference
   ECSClusterName:
     Description: The name of the ECS Cluster.

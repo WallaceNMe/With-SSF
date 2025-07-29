@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Medusa E-commerce Application on AWS ECS Fargate",
+  "Description": "Medusa E-commerce Application on AWS ECS Fargate (Single AZ, No ALBs)",
   "Parameters": {
     "MasterUsername": {
       "Type": "String",
@@ -34,65 +34,6 @@
         }
       }
     },
-    "MedusaDatabase": {
-      "Type": "AWS::RDS::DBInstance",
-      "Properties": {
-        "DBSubnetGroupName": {
-          "Ref": "MedusaDBSubnetGroup"
-        },
-        "DBName": "medusa-db",
-        "Engine": "postgres",
-        "EngineVersion": "10.19",
-        "MasterUsername": {
-          "Ref": "MasterUsername"
-        },
-        "MasterUserPassword": {
-          "Ref": "MasterPassword"
-        },
-        "DBInstanceClass": "db.t3.micro",
-        "AllocatedStorage": 20,
-        "StorageType": "gp2",
-        "PubliclyAccessible": false,
-        "MultiAZ": false,
-        "BackupRetentionPeriod": 0,
-        "VPCSecurityGroups": [
-          {
-            "Fn::GetAtt": [
-              "MedusaDBSecurityGroup",
-              "GroupId"
-            ]
-          }
-        ]
-      }
-    },
-    "MedusaDBSecurityGroup": {
-      "Type": "AWS::EC2::SecurityGroup",
-      "Properties": {
-        "GroupDescription": "Allow inbound traffic to Medusa RDS PostgreSQL instance from ECS Fargate tasks.",
-        "VpcId": {
-          "Ref": "MedusaVPC"
-        },
-        "SecurityGroupIngress": [
-          {
-            "IpProtocol": "tcp",
-            "FromPort": 5432,
-            "ToPort": 5432,
-            "SourceSecurityGroupId": {
-              "Fn::GetAtt": [
-                "MedusaECSTaskSecurityGroup",
-                "GroupId"
-              ]
-            }
-          }
-        ],
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaDBSecurityGroup"
-          }
-        ]
-      }
-    },
     "MedusaVPC": {
       "Type": "AWS::EC2::VPC",
       "Properties": {
@@ -105,28 +46,6 @@
             "Value": "MedusaVPC"
           }
         ]
-      }
-    },
-    "MedusaInternetGateway": {
-      "Type": "AWS::EC2::InternetGateway",
-      "Properties": {
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaInternetGateway"
-          }
-        ]
-      }
-    },
-    "MedusaVPCGatewayAttachment": {
-      "Type": "AWS::EC2::VPCGatewayAttachment",
-      "Properties": {
-        "VpcId": {
-          "Ref": "MedusaVPC"
-        },
-        "InternetGatewayId": {
-          "Ref": "MedusaInternetGateway"
-        }
       }
     },
     "MedusaPublicSubnet1": {
@@ -149,30 +68,6 @@
           {
             "Key": "Name",
             "Value": "MedusaPublicSubnet1"
-          }
-        ]
-      }
-    },
-    "MedusaPublicSubnet2": {
-      "Type": "AWS::EC2::Subnet",
-      "Properties": {
-        "VpcId": {
-          "Ref": "MedusaVPC"
-        },
-        "CidrBlock": "10.0.2.0/24",
-        "AvailabilityZone": {
-          "Fn::Select": [
-            1,
-            {
-              "Fn::GetAZs": ""
-            }
-          ]
-        },
-        "MapPublicIpOnLaunch": true,
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaPublicSubnet2"
           }
         ]
       }
@@ -200,53 +95,26 @@
         ]
       }
     },
-    "MedusaPrivateSubnet2": {
-      "Type": "AWS::EC2::Subnet",
+    "MedusaInternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaInternetGateway"
+          }
+        ]
+      }
+    },
+    "AttachGateway": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
       "Properties": {
         "VpcId": {
           "Ref": "MedusaVPC"
         },
-        "CidrBlock": "10.0.4.0/24",
-        "AvailabilityZone": {
-          "Fn::Select": [
-            1,
-            {
-              "Fn::GetAZs": ""
-            }
-          ]
-        },
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaPrivateSubnet2"
-          }
-        ]
-      }
-    },
-    "MedusaNatGatewayEIP": {
-      "Type": "AWS::EC2::EIP",
-      "Properties": {
-        "Domain": "vpc"
-      }
-    },
-    "MedusaNatGateway": {
-      "Type": "AWS::EC2::NatGateway",
-      "Properties": {
-        "AllocationId": {
-          "Fn::GetAtt": [
-            "MedusaNatGatewayEIP",
-            "AllocationId"
-          ]
-        },
-        "SubnetId": {
-          "Ref": "MedusaPublicSubnet1"
-        },
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaNatGateway"
-          }
-        ]
+        "InternetGatewayId": {
+          "Ref": "MedusaInternetGateway"
+        }
       }
     },
     "MedusaPublicRouteTable": {
@@ -286,15 +154,37 @@
         }
       }
     },
-    "MedusaPublicSubnet2RouteTableAssociation": {
-      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+    "MedusaNatGatewayEIP": {
+      "Type": "AWS::EC2::EIP",
       "Properties": {
-        "SubnetId": {
-          "Ref": "MedusaPublicSubnet2"
+        "Domain": "vpc",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaNatGatewayEIP"
+          }
+        ]
+      }
+    },
+    "MedusaNATGateway": {
+      "Type": "AWS::EC2::NatGateway",
+      "DependsOn": "AttachGateway",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "MedusaNatGatewayEIP",
+            "AllocationId"
+          ]
         },
-        "RouteTableId": {
-          "Ref": "MedusaPublicRouteTable"
-        }
+        "SubnetId": {
+          "Ref": "MedusaPublicSubnet1"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaNATGateway"
+          }
+        ]
       }
     },
     "MedusaPrivateRouteTable": {
@@ -319,7 +209,7 @@
         },
         "DestinationCidrBlock": "0.0.0.0/0",
         "NatGatewayId": {
-          "Ref": "MedusaNatGateway"
+          "Ref": "MedusaNATGateway"
         }
       }
     },
@@ -334,46 +224,30 @@
         }
       }
     },
-    "MedusaPrivateSubnet2RouteTableAssociation": {
-      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+    "MedusaDBSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "SubnetId": {
-          "Ref": "MedusaPrivateSubnet2"
+        "GroupDescription": "Security group for Medusa RDS PostgreSQL database.",
+        "VpcId": {
+          "Ref": "MedusaVPC"
         },
-        "RouteTableId": {
-          "Ref": "MedusaPrivateRouteTable"
-        }
-      }
-    },
-    "MedusaCacheCluster": {
-      "Type": "AWS::ElastiCache::ReplicationGroup",
-      "Properties": {
-        "CacheNodeType": "cache.t3.micro",
-        "Engine": "redis",
-        "EngineVersion": "6.x",
-        "NumCacheClusters": 1,
-        "ReplicationGroupDescription": "Redis cluster for Medusa application",
-        "Port": 6379,
-        "PreferredMaintenanceWindow": "sun:05:00-sun:06:00",
-        "SecurityGroupIds": [
+        "SecurityGroupIngress": [
           {
-            "Fn::GetAtt": [
-              "MedusaCacheSecurityGroup",
-              "GroupId"
-            ]
+            "IpProtocol": "tcp",
+            "FromPort": 5432,
+            "ToPort": 5432,
+            "SourceSecurityGroupId": {
+              "Fn::GetAtt": [
+                "MedusaECSTaskSecurityGroup",
+                "GroupId"
+              ]
+            }
           }
         ],
-        "SnapshotRetentionLimit": 0,
-        "TransitEncryptionEnabled": true,
-        "AtRestEncryptionEnabled": false,
-        "AutomaticFailoverEnabled": false,
-        "CacheSubnetGroupName": {
-          "Ref": "MedusaDBSubnetGroup"
-        },
         "Tags": [
           {
             "Key": "Name",
-            "Value": "MedusaCacheCluster"
+            "Value": "MedusaDBSecurityGroup"
           }
         ]
       }
@@ -381,7 +255,7 @@
     "MedusaCacheSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "Allow inbound traffic to Medusa ElastiCache instance from ECS Fargate tasks.",
+        "GroupDescription": "Security group for Medusa ElastiCache Redis.",
         "VpcId": {
           "Ref": "MedusaVPC"
         },
@@ -406,26 +280,6 @@
         ]
       }
     },
-    "MedusaDBSubnetGroup": {
-      "Type": "AWS::RDS::DBSubnetGroup",
-      "Properties": {
-        "DBSubnetGroupDescription": "Subnet group for Medusa RDS and ElastiCache instances.",
-        "SubnetIds": [
-          {
-            "Ref": "MedusaPrivateSubnet1"
-          },
-          {
-            "Ref": "MedusaPrivateSubnet2"
-          }
-        ],
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaDBSubnetGroup"
-          }
-        ]
-      }
-    },
     "MedusaECSTaskSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
@@ -433,6 +287,20 @@
         "VpcId": {
           "Ref": "MedusaVPC"
         },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 8000,
+            "ToPort": 8000,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 9000,
+            "ToPort": 9000,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ],
         "Tags": [
           {
             "Key": "Name",
@@ -441,22 +309,10 @@
         ]
       }
     },
-    "MedusaECSCluster": {
-      "Type": "AWS::ECS::Cluster",
-      "Properties": {
-        "ClusterName": "MedusaEcsCluster",
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaEcsCluster"
-          }
-        ]
-      }
-    },
     "MedusaECSTaskExecutionRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "RoleName": "MedusaEcsTaskExecutionRole",
+        "RoleName": "MedusaECSTaskExecutionRole",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -465,28 +321,25 @@
               "Principal": {
                 "Service": "ecs-tasks.amazonaws.com"
               },
-              "Action": [
-                "sts:AssumeRole"
-              ]
+              "Action": "sts:AssumeRole"
             }
           ]
         },
         "ManagedPolicyArns": [
-          "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-          "arn:aws:iam::aws:policy/AmazonECRContainerRegistryReadOnly"
+          "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
         ],
         "Tags": [
           {
             "Key": "Name",
-            "Value": "MedusaEcsTaskExecutionRole"
+            "Value": "MedusaECSTaskExecutionRole"
           }
         ]
       }
     },
-    "MedusaBackendTaskRole": {
+    "MedusaECSTaskRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "RoleName": "MedusaBackendTaskRole",
+        "RoleName": "MedusaECSTaskRole",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -495,23 +348,20 @@
               "Principal": {
                 "Service": "ecs-tasks.amazonaws.com"
               },
-              "Action": [
-                "sts:AssumeRole"
-              ]
+              "Action": "sts:AssumeRole"
             }
           ]
         },
         "Policies": [
           {
-            "PolicyName": "MedusaBackendAccessPolicy",
+            "PolicyName": "SecretsManagerAccessPolicy",
             "PolicyDocument": {
               "Version": "2012-10-17",
               "Statement": [
                 {
                   "Effect": "Allow",
                   "Action": [
-                    "secretsmanager:GetSecretValue",
-                    "secretsmanager:DescribeSecret"
+                    "secretsmanager:GetSecretValue"
                   ],
                   "Resource": {
                     "Ref": "MedusaSecrets"
@@ -524,7 +374,7 @@
         "Tags": [
           {
             "Key": "Name",
-            "Value": "MedusaBackendTaskRole"
+            "Value": "MedusaECSTaskRole"
           }
         ]
       }
@@ -555,12 +405,123 @@
         ]
       }
     },
+    "MedusaDatabase": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "DBInstanceIdentifier": "medusa-postgres-db",
+        "DBName": "medusadb",
+        "Engine": "postgres",
+        "EngineVersion": "14.5",
+        "DBInstanceClass": "db.t3.micro",
+        "AllocatedStorage": 20,
+        "MasterUsername": {
+          "Ref": "MasterUsername"
+        },
+        "MasterUserPassword": {
+          "Ref": "MasterPassword"
+        },
+        "VPCSecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "MedusaDBSecurityGroup",
+              "GroupId"
+            ]
+          }
+        ],
+        "DBSubnetGroupName": {
+          "Ref": "MedusaDBSubnetGroup"
+        },
+        "PubliclyAccessible": false,
+        "StorageEncrypted": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaDatabase"
+          }
+        ]
+      }
+    },
+    "MedusaDBSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": "Subnets for Medusa RDS instance.",
+        "SubnetIds": [
+          {
+            "Ref": "MedusaPrivateSubnet1"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaDBSubnetGroup"
+          }
+        ]
+      }
+    },
+    "MedusaCacheSubnetGroup": {
+      "Type": "AWS::ElastiCache::SubnetGroup",
+      "Properties": {
+        "Description": "Subnets for Medusa ElastiCache Redis.",
+        "SubnetIds": [
+          {
+            "Ref": "MedusaPrivateSubnet1"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaCacheSubnetGroup"
+          }
+        ]
+      }
+    },
+    "MedusaRedis": {
+      "Type": "AWS::ElastiCache::ReplicationGroup",
+      "Properties": {
+        "ReplicationGroupId": "medusa-redis-cluster",
+        "ReplicationGroupDescription": "Medusa Redis Cache",
+        "Engine": "redis",
+        "CacheNodeType": "cache.t3.micro",
+        "NumCacheClusters": 1,
+        "Port": 6379,
+        "PreferredMaintenanceWindow": "mon:05:00-mon:06:00",
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "MedusaCacheSecurityGroup",
+              "GroupId"
+            ]
+          }
+        ],
+        "CacheSubnetGroupName": {
+          "Ref": "MedusaCacheSubnetGroup"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaRedis"
+          }
+        ]
+      }
+    },
+    "MedusaECSCluster": {
+      "Type": "AWS::ECS::Cluster",
+      "Properties": {
+        "ClusterName": "MedusaECSCluster",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "MedusaECSCluster"
+          }
+        ]
+      }
+    },
     "MedusaBackendTaskDefinition": {
       "Type": "AWS::ECS::TaskDefinition",
       "Properties": {
         "Family": "medusa-backend-task",
-        "Cpu": "1024",
-        "Memory": "2048",
+        "Cpu": "256",
+        "Memory": "512",
         "NetworkMode": "awsvpc",
         "RequiresCompatibilities": [
           "FARGATE"
@@ -573,7 +534,7 @@
         },
         "TaskRoleArn": {
           "Fn::GetAtt": [
-            "MedusaBackendTaskRole",
+            "MedusaECSTaskRole",
             "Arn"
           ]
         },
@@ -591,76 +552,58 @@
             ],
             "Environment": [
               {
-                "Name": "NODE_ENV",
-                "Value": "production"
-              },
-              {
-                "Name": "MEDUSA_BACKEND_URL",
-                "Value": "http://0.0.0.0:9000"
-              },
-              {
-                "Name": "DATABASE_TYPE",
-                "Value": "postgres"
-              },
-              {
-                "Name": "DATABASE_DATABASE",
-                "Value": "medusa-db"
-              },
-              {
-                "Name": "DATABASE_HOST",
+                "Name": "DATABASE_URL",
                 "Value": {
-                  "Fn::GetAtt": [
-                    "MedusaDatabase",
-                    "Endpoint.Address"
-                  ]
-                }
-              },
-              {
-                "Name": "DATABASE_PORT",
-                "Value": {
-                  "Fn::GetAtt": [
-                    "MedusaDatabase",
-                    "Endpoint.Port"
-                  ]
+                  "Fn::Sub": "postgres://${MasterUsername}:${MasterPassword}@${MedusaDatabase.Endpoint.Address}:5432/medusadb"
                 }
               },
               {
                 "Name": "REDIS_URL",
                 "Value": {
-                  "Fn::Sub": "redis://${MedusaCacheCluster.PrimaryEndPoint.Address}:${MedusaCacheCluster.PrimaryEndPoint.Port}"
-                }
-              },
-              {
-                "Name": "CORS_ORIGINS",
-                "Value": {
-                  "Fn::Sub": "http://${MedusaStorefrontALB.DNSName},http://localhost:8000"
-                }
-              }
-            ],
-            "Secrets": [
-              {
-                "Name": "DATABASE_USERNAME",
-                "ValueFrom": {
-                  "Fn::Sub": "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:username::"
-                }
-              },
-              {
-                "Name": "DATABASE_PASSWORD",
-                "ValueFrom": {
-                  "Fn::Sub": "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:password::"
+                  "Fn::Sub": "redis://${MedusaRedis.PrimaryEndPoint.Address}:6379"
                 }
               },
               {
                 "Name": "JWT_SECRET",
-                "ValueFrom": {
-                  "Fn::Sub": "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:jwt_secret::"
+                "Value": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "{{resolve:secretsmanager:",
+                      {
+                        "Ref": "MedusaSecrets"
+                      },
+                      "}}"
+                    ]
+                  ]
                 }
               },
               {
                 "Name": "COOKIE_SECRET",
-                "ValueFrom": {
-                  "Fn::Sub": "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${MedusaSecrets}:cookie_secret::"
+                "Value": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "{{resolve:secretsmanager:",
+                      {
+                        "Ref": "MedusaSecrets"
+                      },
+                      "}}"
+                    ]
+                  ]
                 }
+              },
+              {
+                "Name": "NODE_ENV",
+                "Value": "production"
+              },
+              {
+                "Name": "STORE_CORS",
+                "Value": "http://localhost:8000,*"
+              },
+              {
+                "Name": "ADMIN_CORS",
+                "Value": "http://localhost:7000,*"
               }
             ],
             "LogConfiguration": {
@@ -683,8 +626,8 @@
       "Type": "AWS::ECS::TaskDefinition",
       "Properties": {
         "Family": "medusa-storefront-task",
-        "Cpu": "512",
-        "Memory": "1024",
+        "Cpu": "256",
+        "Memory": "512",
         "NetworkMode": "awsvpc",
         "RequiresCompatibilities": [
           "FARGATE"
@@ -692,6 +635,12 @@
         "ExecutionRoleArn": {
           "Fn::GetAtt": [
             "MedusaECSTaskExecutionRole",
+            "Arn"
+          ]
+        },
+        "TaskRoleArn": {
+          "Fn::GetAtt": [
+            "MedusaECSTaskRole",
             "Arn"
           ]
         },
@@ -709,32 +658,20 @@
             ],
             "Environment": [
               {
-                "Name": "NODE_ENV",
-                "Value": "production"
-              },
-              {
                 "Name": "NEXT_PUBLIC_MEDUSA_BACKEND_URL",
                 "Value": {
-                  "Fn::Sub": "http://${MedusaBackendALB.DNSName}"
+                  "Fn::Sub": "http://${MedusaBackendService.Tasks.PublicIP}:9000"
                 }
               },
               {
                 "Name": "NEXT_PUBLIC_BASE_URL",
                 "Value": {
-                  "Fn::Sub": "http://${MedusaStorefrontALB.DNSName}"
+                  "Fn::Sub": "http://${MedusaStorefrontService.Tasks.PublicIP}:8000"
                 }
-              },
-              {
-                "Name": "NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY",
-                "Value": "pk_1526a1701b4f755788a1b5f72c6454d0f0a37a929a6d2ddbb9b8c0a9a99b9348"
               },
               {
                 "Name": "NEXT_PUBLIC_DEFAULT_REGION",
                 "Value": "us"
-              },
-              {
-                "Name": "NEXT_PUBLIC_STRIPE_KEY",
-                "Value": ""
               }
             ],
             "LogConfiguration": {
@@ -753,175 +690,6 @@
         ]
       }
     },
-    "MedusaStorefrontALB": {
-      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
-      "Properties": {
-        "Scheme": "internet-facing",
-        "Subnets": [
-          {
-            "Ref": "MedusaPublicSubnet1"
-          },
-          {
-            "Ref": "MedusaPublicSubnet2"
-          }
-        ],
-        "SecurityGroups": [
-          {
-            "Fn::GetAtt": [
-              "MedusaALBSecurityGroup",
-              "GroupId"
-            ]
-          }
-        ],
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaStorefrontALB"
-          }
-        ]
-      }
-    },
-    "MedusaStorefrontTargetGroup": {
-      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
-      "Properties": {
-        "Name": "MedusaStorefrontTG",
-        "Port": 8000,
-        "Protocol": "HTTP",
-        "VpcId": {
-          "Ref": "MedusaVPC"
-        },
-        "TargetType": "ip",
-        "HealthCheckIntervalSeconds": 30,
-        "HealthCheckPath": "/",
-        "HealthCheckProtocol": "HTTP",
-        "HealthCheckTimeoutSeconds": 5,
-        "HealthyThresholdCount": 2,
-        "UnhealthyThresholdCount": 2,
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaStorefrontTG"
-          }
-        ]
-      }
-    },
-    "MedusaStorefrontListener": {
-      "Type": "AWS::ElasticLoadBalancingV2::Listener",
-      "Properties": {
-        "LoadBalancerArn": {
-          "Ref": "MedusaStorefrontALB"
-        },
-        "Port": 80,
-        "Protocol": "HTTP",
-        "DefaultActions": [
-          {
-            "Type": "forward",
-            "TargetGroupArn": {
-              "Ref": "MedusaStorefrontTargetGroup"
-            }
-          }
-        ]
-      }
-    },
-    "MedusaBackendALB": {
-      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
-      "Properties": {
-        "Scheme": "internet-facing",
-        "Subnets": [
-          {
-            "Ref": "MedusaPublicSubnet1"
-          },
-          {
-            "Ref": "MedusaPublicSubnet2"
-          }
-        ],
-        "SecurityGroups": [
-          {
-            "Fn::GetAtt": [
-              "MedusaALBSecurityGroup",
-              "GroupId"
-            ]
-          }
-        ],
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaBackendALB"
-          }
-        ]
-      }
-    },
-    "MedusaBackendTargetGroup": {
-      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
-      "Properties": {
-        "Name": "MedusaBackendTG",
-        "Port": 9000,
-        "Protocol": "HTTP",
-        "VpcId": {
-          "Ref": "MedusaVPC"
-        },
-        "TargetType": "ip",
-        "HealthCheckIntervalSeconds": 30,
-        "HealthCheckPath": "/health",
-        "HealthCheckProtocol": "HTTP",
-        "HealthCheckTimeoutSeconds": 5,
-        "HealthyThresholdCount": 2,
-        "UnhealthyThresholdCount": 2,
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaBackendTG"
-          }
-        ]
-      }
-    },
-    "MedusaBackendListener": {
-      "Type": "AWS::ElasticLoadBalancingV2::Listener",
-      "Properties": {
-        "LoadBalancerArn": {
-          "Ref": "MedusaBackendALB"
-        },
-        "Port": 9000,
-        "Protocol": "HTTP",
-        "DefaultActions": [
-          {
-            "Type": "forward",
-            "TargetGroupArn": {
-              "Ref": "MedusaBackendTargetGroup"
-            }
-          }
-        ]
-      }
-    },
-    "MedusaALBSecurityGroup": {
-      "Type": "AWS::EC2::SecurityGroup",
-      "Properties": {
-        "GroupDescription": "Allow HTTP access to the ALBs.",
-        "VpcId": {
-          "Ref": "MedusaVPC"
-        },
-        "SecurityGroupIngress": [
-          {
-            "IpProtocol": "tcp",
-            "FromPort": 80,
-            "ToPort": 80,
-            "CidrIp": "0.0.0.0/0"
-          },
-          {
-            "IpProtocol": "tcp",
-            "FromPort": 9000,
-            "ToPort": 9000,
-            "CidrIp": "0.0.0.0/0"
-          }
-        ],
-        "Tags": [
-          {
-            "Key": "Name",
-            "Value": "MedusaALBSecurityGroup"
-          }
-        ]
-      }
-    },
     "MedusaBackendService": {
       "Type": "AWS::ECS::Service",
       "Properties": {
@@ -935,13 +703,10 @@
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
-            "AssignPublicIp": "DISABLED",
+            "AssignPublicIp": "ENABLED",
             "Subnets": [
               {
-                "Ref": "MedusaPrivateSubnet1"
-              },
-              {
-                "Ref": "MedusaPrivateSubnet2"
+                "Ref": "MedusaPublicSubnet1"
               }
             ],
             "SecurityGroups": [
@@ -954,15 +719,6 @@
             ]
           }
         },
-        "LoadBalancers": [
-          {
-            "ContainerName": "medusa-backend-container",
-            "ContainerPort": 9000,
-            "TargetGroupArn": {
-              "Ref": "MedusaBackendTargetGroup"
-            }
-          }
-        ],
         "Tags": [
           {
             "Key": "Name",
@@ -984,13 +740,10 @@
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
-            "AssignPublicIp": "DISABLED",
+            "AssignPublicIp": "ENABLED",
             "Subnets": [
               {
-                "Ref": "MedusaPrivateSubnet1"
-              },
-              {
-                "Ref": "MedusaPrivateSubnet2"
+                "Ref": "MedusaPublicSubnet1"
               }
             ],
             "SecurityGroups": [
@@ -1001,16 +754,8 @@
                 ]
               }
             ]
-          },
-        "LoadBalancers": [
-          {
-            "ContainerName": "medusa-storefront-container",
-            "ContainerPort": 8000,
-            "TargetGroupArn": {
-              "Ref": "MedusaStorefrontTargetGroup"
-            }
           }
-        ],
+        },
         "Tags": [
           {
             "Key": "Name",
@@ -1021,30 +766,6 @@
     }
   },
   "Outputs": {
-    "MedusaStorefrontURL": {
-      "Description": "The URL for the Medusa Storefront application.",
-      "Value": {
-        "Fn::GetAtt": [
-          "MedusaStorefrontALB",
-          "DNSName"
-        ]
-      },
-      "Export": {
-        "Name": "MedusaStorefrontURL"
-      }
-    },
-    "MedusaBackendAPIURL": {
-      "Description": "The URL for the Medusa Backend API.",
-      "Value": {
-        "Fn::GetAtt": [
-          "MedusaBackendALB",
-          "DNSName"
-        ]
-      },
-      "Export": {
-        "Name": "MedusaBackendAPIURL"
-      }
-    },
     "ECSClusterName": {
       "Description": "The name of the ECS Cluster.",
       "Value": {
@@ -1055,5 +776,4 @@
       }
     }
   }
-}
 }
